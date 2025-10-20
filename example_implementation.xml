@@ -1,0 +1,742 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+The content has been processed where security check has been disabled.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Security check has been disabled - content may contain sensitive information
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+app/
+  chat.py
+  constants.py
+  facts.py
+  main.py
+  memory_store.py
+  sample_widget.py
+  weather.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="app/chat.py">
+"""ChatKit server integration for the boilerplate backend."""
+
+from __future__ import annotations
+
+import inspect
+import logging
+from datetime import datetime
+from typing import Annotated, Any, AsyncIterator, Final, Literal
+from uuid import uuid4
+
+from agents import Agent, RunContextWrapper, Runner, function_tool
+from chatkit.agents import (
+    AgentContext,
+    ClientToolCall,
+    ThreadItemConverter,
+    stream_agent_response,
+)
+from chatkit.server import ChatKitServer, ThreadItemDoneEvent
+from chatkit.types import (
+    Attachment,
+    ClientToolCallItem,
+    HiddenContextItem,
+    ThreadItem,
+    ThreadMetadata,
+    ThreadStreamEvent,
+    UserMessageItem,
+)
+from openai.types.responses import ResponseInputContentParam
+from pydantic import ConfigDict, Field
+
+from .constants import INSTRUCTIONS, MODEL
+from .facts import Fact, fact_store
+from .memory_store import MemoryStore
+from .sample_widget import render_weather_widget, weather_widget_copy_text
+from .weather import (
+    WeatherLookupError,
+    retrieve_weather,
+)
+from .weather import (
+    normalize_unit as normalize_temperature_unit,
+)
+
+# If you want to check what's going on under the hood, set this to DEBUG
+logging.basicConfig(level=logging.INFO)
+
+SUPPORTED_COLOR_SCHEMES: Final[frozenset[str]] = frozenset({"light", "dark"})
+CLIENT_THEME_TOOL_NAME: Final[str] = "switch_theme"
+
+
+def _normalize_color_scheme(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized in SUPPORTED_COLOR_SCHEMES:
+        return normalized
+    if "dark" in normalized:
+        return "dark"
+    if "light" in normalized:
+        return "light"
+    raise ValueError("Theme must be either 'light' or 'dark'.")
+
+
+def _gen_id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex[:8]}"
+
+
+def _is_tool_completion_item(item: Any) -> bool:
+    return isinstance(item, ClientToolCallItem)
+
+
+class FactAgentContext(AgentContext):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    store: Annotated[MemoryStore, Field(exclude=True)]
+    request_context: dict[str, Any]
+
+
+async def _stream_saved_hidden(ctx: RunContextWrapper[FactAgentContext], fact: Fact) -> None:
+    await ctx.context.stream(
+        ThreadItemDoneEvent(
+            item=HiddenContextItem(
+                id=_gen_id("msg"),
+                thread_id=ctx.context.thread.id,
+                created_at=datetime.now(),
+                content=(
+                    f'<FACT_SAVED id="{fact.id}" threadId="{ctx.context.thread.id}">{fact.text}</FACT_SAVED>'
+                ),
+            ),
+        )
+    )
+
+
+@function_tool(description_override="Record a fact shared by the user so it is saved immediately.")
+async def save_fact(
+    ctx: RunContextWrapper[FactAgentContext],
+    fact: str,
+) -> dict[str, str] | None:
+    try:
+        saved = await fact_store.create(text=fact)
+        confirmed = await fact_store.mark_saved(saved.id)
+        if confirmed is None:
+            raise ValueError("Failed to save fact")
+        await _stream_saved_hidden(ctx, confirmed)
+        ctx.context.client_tool_call = ClientToolCall(
+            name="record_fact",
+            arguments={"fact_id": confirmed.id, "fact_text": confirmed.text},
+        )
+        print(f"FACT SAVED: {confirmed}")
+        return {"fact_id": confirmed.id, "status": "saved"}
+    except Exception:
+        logging.exception("Failed to save fact")
+        return None
+
+
+@function_tool(
+    description_override="Switch the chat interface between light and dark color schemes."
+)
+async def switch_theme(
+    ctx: RunContextWrapper[FactAgentContext],
+    theme: str,
+) -> dict[str, str] | None:
+    logging.debug(f"Switching theme to {theme}")
+    try:
+        requested = _normalize_color_scheme(theme)
+        ctx.context.client_tool_call = ClientToolCall(
+            name=CLIENT_THEME_TOOL_NAME,
+            arguments={"theme": requested},
+        )
+        return {"theme": requested}
+    except Exception:
+        logging.exception("Failed to switch theme")
+        return None
+
+
+@function_tool(
+    description_override="Look up the current weather and upcoming forecast for a location and render an interactive weather dashboard."
+)
+async def get_weather(
+    ctx: RunContextWrapper[FactAgentContext],
+    location: str,
+    unit: Literal["celsius", "fahrenheit"] | str | None = None,
+) -> dict[str, str | None]:
+    print("[WeatherTool] tool invoked", {"location": location, "unit": unit})
+    try:
+        normalized_unit = normalize_temperature_unit(unit)
+    except WeatherLookupError as exc:
+        print("[WeatherTool] invalid unit", {"error": str(exc)})
+        raise ValueError(str(exc)) from exc
+
+    try:
+        data = await retrieve_weather(location, normalized_unit)
+    except WeatherLookupError as exc:
+        print("[WeatherTool] lookup failed", {"error": str(exc)})
+        raise ValueError(str(exc)) from exc
+
+    print(
+        "[WeatherTool] lookup succeeded",
+        {
+            "location": data.location,
+            "temperature": data.temperature,
+            "unit": data.temperature_unit,
+        },
+    )
+    try:
+        widget = render_weather_widget(data)
+        copy_text = weather_widget_copy_text(data)
+        payload: Any
+        try:
+            payload = widget.model_dump()
+        except AttributeError:
+            payload = widget
+        print("[WeatherTool] widget payload", payload)
+    except Exception as exc:  # noqa: BLE001
+        print("[WeatherTool] widget build failed", {"error": str(exc)})
+        raise ValueError("Weather data is currently unavailable for that location.") from exc
+
+    print("[WeatherTool] streaming widget")
+    try:
+        await ctx.context.stream_widget(widget, copy_text=copy_text)
+    except Exception as exc:  # noqa: BLE001
+        print("[WeatherTool] widget stream failed", {"error": str(exc)})
+        raise ValueError("Weather data is currently unavailable for that location.") from exc
+
+    print("[WeatherTool] widget streamed")
+
+    observed = data.observation_time.isoformat() if data.observation_time else None
+
+    return {
+        "location": data.location,
+        "unit": normalized_unit,
+        "observed_at": observed,
+    }
+
+
+def _user_message_text(item: UserMessageItem) -> str:
+    parts: list[str] = []
+    for part in item.content:
+        text = getattr(part, "text", None)
+        if text:
+            parts.append(text)
+    return " ".join(parts).strip()
+
+
+class FactAssistantServer(ChatKitServer[dict[str, Any]]):
+    """ChatKit server wired up with the fact-recording tool."""
+
+    def __init__(self) -> None:
+        self.store: MemoryStore = MemoryStore()
+        super().__init__(self.store)
+        tools = [save_fact, switch_theme, get_weather]
+        self.assistant = Agent[FactAgentContext](
+            model=MODEL,
+            name="ChatKit Guide",
+            instructions=INSTRUCTIONS,
+            tools=tools,  # type: ignore[arg-type]
+        )
+        self._thread_item_converter = self._init_thread_item_converter()
+
+    async def respond(
+        self,
+        thread: ThreadMetadata,
+        item: UserMessageItem | None,
+        context: dict[str, Any],
+    ) -> AsyncIterator[ThreadStreamEvent]:
+        agent_context = FactAgentContext(
+            thread=thread,
+            store=self.store,
+            request_context=context,
+        )
+
+        target_item: ThreadItem | None = item
+        if target_item is None:
+            target_item = await self._latest_thread_item(thread, context)
+
+        if target_item is None or _is_tool_completion_item(target_item):
+            return
+
+        agent_input = await self._to_agent_input(thread, target_item)
+        if agent_input is None:
+            return
+
+        result = Runner.run_streamed(
+            self.assistant,
+            agent_input,
+            context=agent_context,
+        )
+
+        async for event in stream_agent_response(agent_context, result):
+            yield event
+        return
+
+    async def to_message_content(self, _input: Attachment) -> ResponseInputContentParam:
+        raise RuntimeError("File attachments are not supported in this demo.")
+
+    def _init_thread_item_converter(self) -> Any | None:
+        converter_cls = ThreadItemConverter
+        if converter_cls is None or not callable(converter_cls):
+            return None
+
+        attempts: tuple[dict[str, Any], ...] = (
+            {"to_message_content": self.to_message_content},
+            {"message_content_converter": self.to_message_content},
+            {},
+        )
+
+        for kwargs in attempts:
+            try:
+                return converter_cls(**kwargs)
+            except TypeError:
+                continue
+        return None
+
+    async def _latest_thread_item(
+        self, thread: ThreadMetadata, context: dict[str, Any]
+    ) -> ThreadItem | None:
+        try:
+            items = await self.store.load_thread_items(thread.id, None, 1, "desc", context)
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+        return items.data[0] if getattr(items, "data", None) else None
+
+    async def _to_agent_input(
+        self,
+        thread: ThreadMetadata,
+        item: ThreadItem,
+    ) -> Any | None:
+        if _is_tool_completion_item(item):
+            return None
+
+        converter = getattr(self, "_thread_item_converter", None)
+        if converter is not None:
+            for attr in (
+                "to_input_item",
+                "convert",
+                "convert_item",
+                "convert_thread_item",
+            ):
+                method = getattr(converter, attr, None)
+                if method is None:
+                    continue
+                call_args: list[Any] = [item]
+                call_kwargs: dict[str, Any] = {}
+                try:
+                    signature = inspect.signature(method)
+                except (TypeError, ValueError):
+                    signature = None
+
+                if signature is not None:
+                    params = [
+                        parameter
+                        for parameter in signature.parameters.values()
+                        if parameter.kind
+                        not in (
+                            inspect.Parameter.VAR_POSITIONAL,
+                            inspect.Parameter.VAR_KEYWORD,
+                        )
+                    ]
+                    if len(params) >= 2:
+                        next_param = params[1]
+                        if next_param.kind in (
+                            inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        ):
+                            call_args.append(thread)
+                        else:
+                            call_kwargs[next_param.name] = thread
+
+                result = method(*call_args, **call_kwargs)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+
+        if isinstance(item, UserMessageItem):
+            return _user_message_text(item)
+
+        return None
+
+    async def _add_hidden_item(
+        self,
+        thread: ThreadMetadata,
+        context: dict[str, Any],
+        content: str,
+    ) -> None:
+        await self.store.add_thread_item(
+            thread.id,
+            HiddenContextItem(
+                id=_gen_id("msg"),
+                thread_id=thread.id,
+                created_at=datetime.now(),
+                content=content,
+            ),
+            context,
+        )
+
+
+def create_chatkit_server() -> FactAssistantServer | None:
+    """Return a configured ChatKit server instance if dependencies are available."""
+    return FactAssistantServer()
+</file>
+
+<file path="app/constants.py">
+"""Constants and configuration used across the ChatKit backend."""
+
+from __future__ import annotations
+
+from typing import Final
+
+INSTRUCTIONS: Final[str] = (
+    "You are ChatKit Guide, an onboarding assistant that primarily helps users "
+    "understand how to use ChatKit and to record short factual statements "
+    "about themselves. You may also provide weather updates when asked. You "
+    "should never answer questions that are unrelated to ChatKit, the facts "
+    "you are collecting, or weather requests. Instead, politely steer the user "
+    "back to discussing ChatKit, sharing facts about themselves, or clarify the "
+    "weather location they are interested in."
+    "\n\n"
+    "Begin every new thread by encouraging the user to tell you about "
+    "themselves, starting with the question 'Tell me about yourself.' "
+    "If they don't share facts proactively, ask questions to uncover concise facts such as "
+    "their role, location, favourite tools, etc. Each time "
+    "the user shares a concrete fact, call the `save_fact` tool with a "
+    "short, declarative summary so it is recorded immediately."
+    "\n\n"
+    "The chat interface supports light and dark themes. When a user asks to switch "
+    "themes, call the `switch_theme` tool with the `theme` parameter set to light or dark "
+    "to match their request before replying. After switching, briefly confirm the change "
+    "in your response."
+    "\n\n"
+    "When a user asks about the weather in a specific place, call the `get_weather` tool "
+    "with their requested location and preferred units (Celsius by default, Fahrenheit if "
+    "they ask). After the widget renders, summarize the key highlights in your reply."
+    "\n\n"
+    "When you refuse a request, explain briefly that you can only help with "
+    "ChatKit guidance, collecting facts, or sharing weather updates."
+)
+
+MODEL = "gpt-4.1-mini"
+</file>
+
+<file path="app/facts.py">
+"""Simple in-memory store for user facts.
+
+This module provides an async-safe fact storage system for the ChatKit agent. When
+the agent learns information about the user (e.g., "favorite color is blue"), it
+creates a Fact record with PENDING status. The frontend can then save or discard
+these facts via the REST API, updating their status accordingly.
+
+Architecture:
+- Fact: Dataclass holding text, status (pending/saved/discarded), ID, and timestamp
+- FactStatus: Enum defining the three lifecycle states
+- FactStore: Thread-safe in-memory store using asyncio locks for concurrent access
+- fact_store: Global singleton instance shared across the FastAPI app and agent tools
+
+The store maintains insertion order via a separate _order list, so saved facts appear
+in chronological order. All mutations are guarded by an asyncio.Lock to prevent race
+conditions when the agent and API endpoints access facts concurrently.
+
+Note: Data is ephemeral—restarting the server wipes all facts. For production, replace
+FactStore with a persistent backend (SQLite, Postgres, etc.) that implements the same
+async interface.
+"""
+</file>
+
+<file path="app/main.py">
+"""FastAPI entrypoint wiring the ChatKit server and REST endpoints."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from chatkit.server import StreamingResult
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import Response, StreamingResponse
+from starlette.responses import JSONResponse
+
+from .chat import (
+    FactAssistantServer,
+    create_chatkit_server,
+)
+from .facts import fact_store
+
+app = FastAPI(title="ChatKit API")
+
+_chatkit_server: FactAssistantServer | None = create_chatkit_server()
+
+
+def get_chatkit_server() -> FactAssistantServer:
+    if _chatkit_server is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "ChatKit dependencies are missing. Install the ChatKit Python "
+                "package to enable the conversational endpoint."
+            ),
+        )
+    return _chatkit_server
+
+
+@app.post("/chatkit")
+async def chatkit_endpoint(
+    request: Request, server: FactAssistantServer = Depends(get_chatkit_server)
+) -> Response:
+    payload = await request.body()
+    result = await server.process(payload, {"request": request})
+    if isinstance(result, StreamingResult):
+        return StreamingResponse(result, media_type="text/event-stream")
+    if hasattr(result, "json"):
+        return Response(content=result.json, media_type="application/json")
+    return JSONResponse(result)
+
+
+@app.get("/facts")
+async def list_facts() -> dict[str, Any]:
+    facts = await fact_store.list_saved()
+    return {"facts": [fact.as_dict() for fact in facts]}
+
+
+@app.post("/facts/{fact_id}/save")
+async def save_fact(fact_id: str) -> dict[str, Any]:
+    fact = await fact_store.mark_saved(fact_id)
+    if fact is None:
+        raise HTTPException(status_code=404, detail="Fact not found")
+    return {"fact": fact.as_dict()}
+
+
+@app.post("/facts/{fact_id}/discard")
+async def discard_fact(fact_id: str) -> dict[str, Any]:
+    fact = await fact_store.discard(fact_id)
+    if fact is None:
+        raise HTTPException(status_code=404, detail="Fact not found")
+    return {"fact": fact.as_dict()}
+
+
+@app.get("/health")
+async def health_check() -> dict[str, str]:
+    return {"status": "healthy"}
+</file>
+
+<file path="app/memory_store.py">
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List
+
+from chatkit.store import NotFoundError, Store
+from chatkit.types import Attachment, Page, Thread, ThreadItem, ThreadMetadata
+
+
+@dataclass
+class _ThreadState:
+    thread: ThreadMetadata
+    items: List[ThreadItem]
+
+
+class MemoryStore(Store[dict[str, Any]]):
+    """Simple in-memory store compatible with the ChatKit server interface."""
+
+    def __init__(self) -> None:
+        self._threads: Dict[str, _ThreadState] = {}
+        # Attachments intentionally unsupported; use a real store that enforces auth.
+
+    @staticmethod
+    def _coerce_thread_metadata(thread: ThreadMetadata | Thread) -> ThreadMetadata:
+        """Return thread metadata without any embedded items (openai-chatkit>=1.0)."""
+        has_items = isinstance(thread, Thread) or "items" in getattr(
+            thread, "model_fields_set", set()
+        )
+        if not has_items:
+            return thread.model_copy(deep=True)
+
+        data = thread.model_dump()
+        data.pop("items", None)
+        return ThreadMetadata(**data).model_copy(deep=True)
+
+    # -- Thread metadata -------------------------------------------------
+    async def load_thread(self, thread_id: str, context: dict[str, Any]) -> ThreadMetadata:
+        state = self._threads.get(thread_id)
+        if not state:
+            raise NotFoundError(f"Thread {thread_id} not found")
+        return self._coerce_thread_metadata(state.thread)
+
+    async def save_thread(self, thread: ThreadMetadata, context: dict[str, Any]) -> None:
+        metadata = self._coerce_thread_metadata(thread)
+        state = self._threads.get(thread.id)
+        if state:
+            state.thread = metadata
+        else:
+            self._threads[thread.id] = _ThreadState(
+                thread=metadata,
+                items=[],
+            )
+
+    async def load_threads(
+        self,
+        limit: int,
+        after: str | None,
+        order: str,
+        context: dict[str, Any],
+    ) -> Page[ThreadMetadata]:
+        threads = sorted(
+            (self._coerce_thread_metadata(state.thread) for state in self._threads.values()),
+            key=lambda t: t.created_at or datetime.min,
+            reverse=(order == "desc"),
+        )
+
+        if after:
+            index_map = {thread.id: idx for idx, thread in enumerate(threads)}
+            start = index_map.get(after, -1) + 1
+        else:
+            start = 0
+
+        slice_threads = threads[start : start + limit + 1]
+        has_more = len(slice_threads) > limit
+        slice_threads = slice_threads[:limit]
+        next_after = slice_threads[-1].id if has_more and slice_threads else None
+        return Page(
+            data=slice_threads,
+            has_more=has_more,
+            after=next_after,
+        )
+
+    async def delete_thread(self, thread_id: str, context: dict[str, Any]) -> None:
+        self._threads.pop(thread_id, None)
+
+    # -- Thread items ----------------------------------------------------
+    def _items(self, thread_id: str) -> List[ThreadItem]:
+        state = self._threads.get(thread_id)
+        if state is None:
+            state = _ThreadState(
+                thread=ThreadMetadata(id=thread_id, created_at=datetime.utcnow()),
+                items=[],
+            )
+            self._threads[thread_id] = state
+        return state.items
+
+    async def load_thread_items(
+        self,
+        thread_id: str,
+        after: str | None,
+        limit: int,
+        order: str,
+        context: dict[str, Any],
+    ) -> Page[ThreadItem]:
+        items = [item.model_copy(deep=True) for item in self._items(thread_id)]
+        items.sort(
+            key=lambda item: getattr(item, "created_at", datetime.utcnow()),
+            reverse=(order == "desc"),
+        )
+
+        if after:
+            index_map = {item.id: idx for idx, item in enumerate(items)}
+            start = index_map.get(after, -1) + 1
+        else:
+            start = 0
+
+        slice_items = items[start : start + limit + 1]
+        has_more = len(slice_items) > limit
+        slice_items = slice_items[:limit]
+        next_after = slice_items[-1].id if has_more and slice_items else None
+        return Page(data=slice_items, has_more=has_more, after=next_after)
+
+    async def add_thread_item(
+        self, thread_id: str, item: ThreadItem, context: dict[str, Any]
+    ) -> None:
+        self._items(thread_id).append(item.model_copy(deep=True))
+
+    async def save_item(self, thread_id: str, item: ThreadItem, context: dict[str, Any]) -> None:
+        items = self._items(thread_id)
+        for idx, existing in enumerate(items):
+            if existing.id == item.id:
+                items[idx] = item.model_copy(deep=True)
+                return
+        items.append(item.model_copy(deep=True))
+
+    async def load_item(self, thread_id: str, item_id: str, context: dict[str, Any]) -> ThreadItem:
+        for item in self._items(thread_id):
+            if item.id == item_id:
+                return item.model_copy(deep=True)
+        raise NotFoundError(f"Item {item_id} not found")
+
+    async def delete_thread_item(
+        self, thread_id: str, item_id: str, context: dict[str, Any]
+    ) -> None:
+        items = self._items(thread_id)
+        self._threads[thread_id].items = [item for item in items if item.id != item_id]
+
+    # -- Files -----------------------------------------------------------
+    # These methods are not currently used but required to be compatible with the Store interface.
+
+    async def save_attachment(
+        self,
+        attachment: Attachment,
+        context: dict[str, Any],
+    ) -> None:
+        raise NotImplementedError(
+            "MemoryStore does not persist attachments. Provide a Store implementation "
+            "that enforces authentication and authorization before enabling uploads."
+        )
+
+    async def load_attachment(
+        self,
+        attachment_id: str,
+        context: dict[str, Any],
+    ) -> Attachment:
+        raise NotImplementedError(
+            "MemoryStore does not load attachments. Provide a Store implementation "
+            "that enforces authentication and authorization before enabling uploads."
+        )
+
+    async def delete_attachment(self, attachment_id: str, context: dict[str, Any]) -> None:
+        raise NotImplementedError(
+            "MemoryStore does not delete attachments because they are never stored."
+        )
+</file>
+
+<file path="app/sample_widget.py">
+# Previously defined weather widget utilities returning SVG encodings and ChatKit widget components.
+</file>
+
+<file path="app/weather.py">
+"""Geocodes a user-supplied place, downloads current and upcoming weather from the 
+Open-Meteo API, and shapes the response into WeatherWidgetData for the ChatKit UI."""
+</file>
+
+</files>

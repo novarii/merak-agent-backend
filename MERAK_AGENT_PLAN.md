@@ -18,7 +18,8 @@
 ## Phase 1 — Foundations
 - Add OpenAI Agents SDK as an integration (`app/integrations/openai_agents.py`) and expose helpers for creating `Agent`, `Runner`, and tracing configs (Quickstart ref).
 - Create shared Pydantic schemas in `app/schemas/agent_filters.py` reflecting the clarifying questions (use `AgentOutputSchema` patterns for JSON validation).
-- Scaffold FastAPI endpoints in `app/api/agents.py` that map HTTP payloads to agent sessions.
+- Stand up a ChatKit server wrapper (`app/integrations/chatkit_server.py`) extending `ChatKitServer` and wiring `Runner.run_streamed` via `stream_agent_response` to the orchestrator (ChatKit server ref).
+- Expose a FastAPI route (e.g. `app/api/chatkit.py`) mirroring the ChatKit example that calls `server.process(...)` and streams SSE responses when the UI hits `/chatkit` (ChatKit FastAPI ref).
 
 ## Phase 2 — Orchestrator Agent (“Merak”)
 - Define Merak in `agents/merak/orchestrator.py` using `Agent` class with instructions about interviewing users, asking clarifiers when filter fields are missing, and confirming final criteria (Quickstart ref).
@@ -27,8 +28,8 @@
 
 ## Phase 3 — Filter Standardizer Agent
 - Build a specialized agent in `agents/merak/filter_standardizer.py` that accepts Merak’s confirmed summary and emits `AgentFilterPayload` JSON (AgentOutputSchema ref for strict validation).
-- Register a `Handoff` from Merak to the standardizer using `Handoff` dataclass with `on_invoke_handoff` callback (Handoff ref).
-- Ensure Merak waits for the structured response before continuing the conversation; leverage `Runner` orchestration to manage this round trip (Runner orchestrator ref).
+- Register a `Handoff` from Merak to the standardizer using `Handoff` dataclass with `on_invoke_handoff` callback; surface the handoff through the ChatKit stream so the UI sees progress events (Handoff ref, ChatKit stream ref).
+- Ensure Merak waits for the structured response before continuing the conversation; leverage `Runner` orchestration to manage this round trip and persist `previous_response_id` in thread metadata for resumability (Runner orchestrator ref, ChatKit metadata ref).
 
 ## Phase 4 — Vector Store Search
 - Implement `app/services/search.py` that wraps OpenAI File Search tool with project vector store IDs (FileSearchTool ref).
