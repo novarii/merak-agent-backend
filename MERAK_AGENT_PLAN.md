@@ -38,23 +38,21 @@
 - Capture conversation state using the `RunContextWrapper` idiom from the example so Merak has access to thread metadata and can resume sessions cleanly.
 - Prepare detailed `handoff_description` metadata that mirrors the example’s handoff payload style (document keys in `app/schemas/handoffs.py`).
 
-## Phase 3 — Filter Standardizer Agent (reference `agents` + `handoff` flow in example)
-- Build `agents/filter_standardizer.py` that accepts the orchestrator’s confirmed summary and emits `AgentFilterPayload` JSON validated with `AgentOutputSchema`.
-- Register a `Handoff` from Merak to the standardizer using the example’s `on_invoke_handoff` callback pattern so ChatKit streams progress updates.
-- Ensure Merak awaits the handoff response via `Runner.run_streamed(...)`, using the `previous_response_id` and metadata propagation from the example to support resumability.
+## Phase 3 — Searcher Agent (openai.github.io/openai-agents-python/tools/ agent-as-tool with context 7)
+- Build `agents/merak/searcher.py` that accepts the orchestrator’s confirmed brief and returns `AgentFilterPayload` JSON validated with `AgentOutputSchema`.
+- Surface the Searcher through `as_tool(tool_name="search_agents", tool_description="Normalize filters and retrieve candidates")` so Merak stays in charge of the conversation while invoking retrieval.
+- Ensure the tool wraps the vector search helper from Phase 4, returning both the normalized payload and top results Merak can summarize.
 
 ## Phase 4 — Vector Store Search (reference tool wiring in example)
 - Implement `app/services/search.py` wrapping OpenAI’s File Search tool; base configuration options (top_k, filters) on how the example wires tools in `function_tool` decorators.
-- Register a `file_search` tool with Filter Standardizer or a dedicated Retrieval agent; reuse the `function_tool` decorator style from the example to keep tool signatures consistent.
-- Provide a `build_file_search_tool` helper that returns `search_agents(query: str, industry: str | None = None, agent_type: str | None = None, min_rate: int | None = None, max_rate: int | None = None, min_success_rate: int | None = None, availability: str | None = None, max_results: int = 10)`; construct the `attribute_filter` dynamically:
+- Register a `file_search` tool with the Searcher agent; reuse the `function_tool` decorator style from the example to keep tool signatures consistent.
+- Provide a `build_file_search_tool` helper that returns `search_agents(query: str, industry: str | None = None, agent_type: str | None = None, max_rate: int | None = None, min_success_rate: int | None = None, availability: str | None = None, max_results: int = 10)`; construct the `attribute_filter` dynamically:
   ```python
   filters = []
   if industry:
       filters.append({"type": "eq", "key": "industry", "value": industry})
   if agent_type:
       filters.append({"type": "eq", "key": "agent_type", "value": agent_type})
-  if min_rate is not None:
-      filters.append({"type": "gte", "key": "base_rate", "value": min_rate})
   if max_rate is not None:
       filters.append({"type": "lte", "key": "base_rate", "value": max_rate})
   if min_success_rate is not None:

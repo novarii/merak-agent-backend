@@ -154,11 +154,7 @@ class AgentFilterPayload(_BaseSchema):
 
         if self.success_rate.min_success_rate is not None:
             filters.append(
-                {
-                    "type": "gte",
-                    "key": "success_rate",
-                    "value": self.success_rate.min_success_rate,
-                }
+                {"type": "gte", "key": "success_rate", "value": self.success_rate.min_success_rate}
             )
 
         if self.availability is not None:
