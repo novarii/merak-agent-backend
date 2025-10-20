@@ -23,14 +23,14 @@
 - Stand up a ChatKit server wrapper `app/integrations/chatkit_server.py` that mirrors the `ChatKitServer` subclass in the example (ensure `stream_agent_response` and `ThreadItemConverter` wiring are preserved).
 - Expose FastAPI routes `app/api/chatkit.py` and `app/api/health.py`, following the `ChatKit` SSE route from the example (`ChatKitServer.process(...)`).
 
-## Phase 2 — Orchestrator Agent (“Merak”) (reference `agents/__init__.py`, `Agent` usage)
-- Define Merak in `agents/merak/orchestrator.py` using the instruction scaffolding shown in the example’s (`example_implementation.xml`) `Agent` definitions; include explicit clarifying prompts per filter facet.
+## Phase 2 — Orchestrator Agent (“Merak”) (reference `merak_agents/__init__.py`, `Agent` usage)
+- Define Merak in `merak_agents/merak/orchestrator.py` using the instruction scaffolding shown in the example’s (`example_implementation.xml`) `Agent` definitions; include explicit clarifying prompts per filter facet.
 - Implement a clarifying loop tool: model after `_handle_client_theme` + tool pattern in `app/chat.py`, but emit structured “missing_fields” payloads Merak can use to decide the next question.
 - Capture conversation state using the `RunContextWrapper` idiom from the example so Merak has access to thread metadata and can resume sessions cleanly.
 - Prepare detailed `handoff_description` metadata that mirrors the example’s handoff payload style (document keys in `app/schemas/handoffs.py`).
 
-## Phase 3 — Filter Standardizer Agent (reference `agents` + `handoff` flow in example)
-- Build `agents/merak/filter_standardizer.py` that accepts the orchestrator’s confirmed summary and emits `AgentFilterPayload` JSON validated with `AgentOutputSchema`.
+## Phase 3 — Filter Standardizer Agent (reference `merak_agents` + `handoff` flow in example)
+- Build `merak_agents/merak/filter_standardizer.py` that accepts the orchestrator’s confirmed summary and emits `AgentFilterPayload` JSON validated with `AgentOutputSchema`.
 - Register a `Handoff` from Merak to the standardizer using the example’s `on_invoke_handoff` callback pattern so ChatKit streams progress updates.
 - Ensure Merak awaits the handoff response via `Runner.run_streamed(...)`, using the `previous_response_id` and metadata propagation from the example to support resumability.
 
@@ -51,5 +51,5 @@
 
 ## Phase 7 — Deployment Readiness
 - Document required environment variables (OpenAI key, vector store IDs) in `.env.example`, validating via `app/core/settings.py` in the same fashion the example centralizes constants in `app/constants.py`.
-- Provide CLI or asynchronous tasks for ingesting agent profiles into the vector store (capture scripts in `agents/ingest/` or `scripts/` as follow-ups).
+- Provide CLI or asynchronous tasks for ingesting agent profiles into the vector store (capture scripts in `merak_agents/ingest/` or `scripts/` as follow-ups).
 - Author a runbook in `docs/architecture.md` detailing agent responsibilities, handoff lifecycles, failure handling, and how to replay threads from the in-memory store implementation.
