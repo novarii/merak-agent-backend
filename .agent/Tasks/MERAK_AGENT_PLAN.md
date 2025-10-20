@@ -36,7 +36,6 @@
 - Define Merak in `agents/orchestrator.py` using the instruction scaffolding shown in the example’s (`example_implementation.xml`) `Agent` definitions; include explicit clarifying prompts per filter facet.
 - Implement a clarifying loop tool: model after `_handle_client_theme` + tool pattern in `app/chat.py`, but emit structured “missing_fields” payloads Merak can use to decide the next question.
 - Capture conversation state using the `RunContextWrapper` idiom from the example so Merak has access to thread metadata and can resume sessions cleanly.
-- Prepare detailed `handoff_description` metadata that mirrors the example’s handoff payload style (document keys in `app/schemas/handoffs.py`).
 
 ## Phase 3 — Searcher Agent (openai.github.io/openai-agents-python/tools/ agent-as-tool with context 7)
 - Build `agents/merak/searcher.py` that accepts the orchestrator’s confirmed brief and returns `AgentFilterPayload` JSON validated with `AgentOutputSchema`.
