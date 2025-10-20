@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Final, List
+from typing import Any, List
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 try:  # pragma: no cover - optional dependency
     from agents import AgentOutputSchema as _BaseSchema
 except ImportError:  # pragma: no cover - fallback when Agents SDK unavailable
     _BaseSchema = BaseModel  # type: ignore[assignment]
-
-DEFAULT_CURRENCY: Final[str] = "USD"
 
 
 class AvailabilityOption(str, Enum):
@@ -33,42 +31,19 @@ class AgentTypeOption(str, Enum):
 
 
 class BaseRateFilter(_BaseSchema):
-    """Hourly rate boundaries expressed in the configured currency."""
+    """Maximum hourly base rate constraint (assumes USD)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    currency: str = Field(
-        default=DEFAULT_CURRENCY,
-        min_length=3,
-        max_length=3,
-        description="ISO-4217 currency code for monetary filters.",
-    )
-    min_rate: int | None = Field(
-        default=None,
-        ge=0,
-        description="Inclusive lower bound for the acceptable hourly base rate.",
-    )
     max_rate: int | None = Field(
         default=None,
         ge=0,
-        description="Inclusive upper bound for the acceptable hourly base rate.",
+        description="Inclusive upper bound for the acceptable hourly base rate in USD.",
     )
-
-    @model_validator(mode="after")
-    def validate_range(self) -> "BaseRateFilter":
-        """Ensure the minimum rate does not exceed the maximum rate."""
-        if (
-            self.min_rate is not None
-            and self.max_rate is not None
-            and self.min_rate > self.max_rate
-        ):
-            msg = "min_rate cannot be greater than max_rate"
-            raise ValueError(msg)
-        return self
 
     def resolved(self) -> bool:
         """Return True when at least one rate constraint has been provided."""
-        return self.min_rate is not None or self.max_rate is not None
+        return self.max_rate is not None
 
 
 class SuccessRateFilter(_BaseSchema):
@@ -170,11 +145,6 @@ class AgentFilterPayload(_BaseSchema):
                 agent_type_filters[0]
                 if len(agent_type_filters) == 1
                 else {"type": "or", "filters": agent_type_filters}
-            )
-
-        if self.base_rate.min_rate is not None:
-            filters.append(
-                {"type": "gte", "key": "base_rate", "value": self.base_rate.min_rate}
             )
 
         if self.base_rate.max_rate is not None:
