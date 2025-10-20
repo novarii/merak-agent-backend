@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.integrations.chatkit_server import MerakChatKitServer, get_chatkit_server
+from app.core.settings import SettingsError
 
 try:  # pragma: no cover - optional dependency
     from chatkit.server import StreamingResult
@@ -16,7 +17,18 @@ router = APIRouter(tags=["chatkit"])
 
 
 def _require_chatkit_server() -> MerakChatKitServer:
-    server = get_chatkit_server()
+    try:
+        server = get_chatkit_server()
+    except SettingsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     if server is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

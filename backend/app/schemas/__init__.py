@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-__all__ = ["agent_filters"]
+__all__ = ["agent_filters", "search_results"]

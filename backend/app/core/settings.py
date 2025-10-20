@@ -28,6 +28,7 @@ class Settings:
 
     openai_api_key: str
     openai_agent_model: str = DEFAULT_AGENT_MODEL
+    openai_vector_store_id: str | None = None
     openai_organization: str | None = None
     openai_project: str | None = None
 
@@ -43,6 +44,7 @@ class Settings:
             openai_agent_model=_optional_env("OPENAI_AGENT_MODEL") or DEFAULT_AGENT_MODEL,
             openai_organization=_optional_env("OPENAI_ORG"),
             openai_project=_optional_env("OPENAI_PROJECT"),
+            openai_vector_store_id=_optional_env("OPENAI_VECTOR_STORE_ID"),
         )
 
 

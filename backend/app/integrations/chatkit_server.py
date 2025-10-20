@@ -16,6 +16,16 @@ from typing import Annotated, Any, AsyncIterator, Optional
 
 from pydantic import ConfigDict, Field
 
+from app.agents.orchestrator import (
+    MERAK_SEARCH_TOOL_NAME,
+    build_merak_orchestrator,
+)
+from app.agents.searcher import (
+    SEARCHER_TOOL_DESCRIPTION,
+    build_searcher_agent,
+)
+from app.core.settings import SettingsError, get_settings
+from app.services.search import build_file_search_tool
 from app.services.thread_store import ThreadStore
 
 try:  # pragma: no cover - optional dependency
@@ -203,7 +213,48 @@ class MerakChatKitServer(ChatKitServer):  # type: ignore[misc]
         return item
 
 
+_ASSISTANT_SINGLETON: Agent | None = None
 _SERVER_SINGLETON: MerakChatKitServer | None = None
+
+
+def _build_default_assistant() -> Agent | None:
+    """Construct Merak's orchestrator agent with the Searcher tool attached."""
+    if Agent is None:
+        return None
+
+    settings = get_settings()
+    if not settings.openai_vector_store_id:
+        raise SettingsError(
+            "OPENAI_VECTOR_STORE_ID must be set to enable Merak's semantic search."
+        )
+
+    file_search_tool = build_file_search_tool(
+        vector_store_id=settings.openai_vector_store_id,
+        max_results=10,
+    )
+
+    searcher_agent = build_searcher_agent(
+        file_search_tool,
+        model=settings.openai_agent_model,
+    )
+
+    searcher_tool = searcher_agent.as_tool(  # type: ignore[assignment]
+        tool_name=MERAK_SEARCH_TOOL_NAME,
+        tool_description=SEARCHER_TOOL_DESCRIPTION,
+    )
+
+    return build_merak_orchestrator(
+        searcher_tool,
+        model=settings.openai_agent_model,
+    )
+
+
+def get_merak_assistant() -> Agent | None:
+    """Return a cached instance of the Merak orchestrator agent."""
+    global _ASSISTANT_SINGLETON
+    if _ASSISTANT_SINGLETON is None:
+        _ASSISTANT_SINGLETON = _build_default_assistant()
+    return _ASSISTANT_SINGLETON
 
 
 def create_chatkit_server(
@@ -213,6 +264,8 @@ def create_chatkit_server(
     """Instantiate the ChatKit server when dependencies are present."""
     if ChatKitServer is None:
         return None
+    if assistant is None:
+        assistant = get_merak_assistant()
     return MerakChatKitServer(assistant=assistant, store=store)
 
 
@@ -224,4 +277,10 @@ def get_chatkit_server() -> MerakChatKitServer | None:
     return _SERVER_SINGLETON
 
 
-__all__ = ["MerakAgentContext", "MerakChatKitServer", "create_chatkit_server", "get_chatkit_server"]
+__all__ = [
+    "MerakAgentContext",
+    "MerakChatKitServer",
+    "create_chatkit_server",
+    "get_chatkit_server",
+    "get_merak_assistant",
+]

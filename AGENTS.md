@@ -1,5 +1,14 @@
 # Repository Guidelines
 
+## Docs
+- We keep all impotant docs in .agent folder and keep them updated. This is the structure:
+
+.agent
+- Tasks: PRD & implementation plan for each feature
+- System: Document the current state of the system (project structure, tech stack, integration points, database schema, and core functionalities such as agent architecture, LLM layer, etc.)
+- SOP: Best practices of execute certain tasks (e.g. how to add a schema migration, how to add a new page route, etc.)
+- README.md: an index of all the documentations we have so people know what & where to look for things
+
 ## Project Structure & Module Organization
 Place the FastAPI application under `app/`; expose the ASGI entrypoint in `app/main.py` and group routers inside `app/api/`. Shared Pydantic models belong in `app/schemas/`, orchestrations and tool wiring in `app/services/`, and integrations with OpenAI vector stores or ChatKit in `app/integrations/`. Keep agent prompt templates and evaluation scripts in `agents/`. Store reference payloads or exploratory notebooks in `assets/` or `notebooks/` rather than alongside runtime modules. You MUST refer to `example_implementation.xml` when example is mentioned in integration plans.
 
