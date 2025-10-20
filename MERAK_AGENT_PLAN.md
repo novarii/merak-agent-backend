@@ -24,7 +24,7 @@
 - Expose FastAPI routes `app/api/chatkit.py` and `app/api/health.py`, following the `ChatKit` SSE route from the example (`ChatKitServer.process(...)`).
 
 ## Phase 2 — Orchestrator Agent (“Merak”) (reference `agents/__init__.py`, `Agent` usage)
-- Define Merak in `agents/merak/orchestrator.py` using the instruction scaffolding shown in the example’s `Agent` definitions; include explicit clarifying prompts per filter facet.
+- Define Merak in `agents/merak/orchestrator.py` using the instruction scaffolding shown in the example’s (`example_implementation.xml`) `Agent` definitions; include explicit clarifying prompts per filter facet.
 - Implement a clarifying loop tool: model after `_handle_client_theme` + tool pattern in `app/chat.py`, but emit structured “missing_fields” payloads Merak can use to decide the next question.
 - Capture conversation state using the `RunContextWrapper` idiom from the example so Merak has access to thread metadata and can resume sessions cleanly.
 - Prepare detailed `handoff_description` metadata that mirrors the example’s handoff payload style (document keys in `app/schemas/handoffs.py`).
