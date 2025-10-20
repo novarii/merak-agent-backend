@@ -16,6 +16,15 @@
 5. Vector search tool retrieves matching agent profiles and applies business ranking.
 6. Merak summarizes the top matches and surfaces structured results to the user and UI.
 
+## Filter Facets
+- `base_rate` — hourly base rate in USD (use numeric comparisons for filtering with optional ceiling thresholds provided by the user).
+- `success_rate` — historical completion ratio expressed as a percentage (support minimum thresholds).
+- `availability` — discrete enum with values `full_time`, `part_time`, or `contract`.
+- `industry` — primary industry tags such as `fintech`, `healthcare`, etc.; allow multi-select filtering.
+- `agent_type` — modality enum describing core channel support: `voice`, `text`, `image`, or `multi_modal`.
+- `agent_id` — internal identifier included in payloads for reference only; do not expose as a filter.
+- Filters feed semantic vector search by composing OpenAI File Search `attribute_filter` payloads (use `eq`, `gte`, `lte` operators combined under an `and` wrapper when multiple facets are present).
+
 ## Phase 1 — Foundations (reference `app/chat.py`, `app/memory_store.py`)
 - Add OpenAI Agents SDK integration in `app/integrations/openai_agents.py`; follow the helper pattern in the example (see `get_runner` / tracing setup in `example_implementation.xml`).
 - Port the in-memory thread store approach from `app/memory_store.py` to a dedicated service (`app/services/thread_store.py`) so ChatKit state is isolated from agent orchestration logic.
@@ -37,6 +46,30 @@
 ## Phase 4 — Vector Store Search (reference tool wiring in example)
 - Implement `app/services/search.py` wrapping OpenAI’s File Search tool; base configuration options (top_k, filters) on how the example wires tools in `function_tool` decorators.
 - Register a `file_search` tool with Filter Standardizer or a dedicated Retrieval agent; reuse the `function_tool` decorator style from the example to keep tool signatures consistent.
+- Provide a `build_file_search_tool` helper that returns `search_agents(query: str, industry: str | None = None, agent_type: str | None = None, min_rate: int | None = None, max_rate: int | None = None, min_success_rate: int | None = None, availability: str | None = None, max_results: int = 10)`; construct the `attribute_filter` dynamically:
+  ```python
+  filters = []
+  if industry:
+      filters.append({"type": "eq", "key": "industry", "value": industry})
+  if agent_type:
+      filters.append({"type": "eq", "key": "agent_type", "value": agent_type})
+  if min_rate is not None:
+      filters.append({"type": "gte", "key": "base_rate", "value": min_rate})
+  if max_rate is not None:
+      filters.append({"type": "lte", "key": "base_rate", "value": max_rate})
+  if min_success_rate is not None:
+      filters.append({"type": "gte", "key": "success_rate", "value": min_success_rate})
+  if availability:
+      filters.append({"type": "eq", "key": "availability", "value": availability})
+  attribute_filter = filters[0] if len(filters) == 1 else {"type": "and", "filters": filters} if filters else None
+  client.vector_stores.search(
+      vector_store_id=settings.vector_store_id,
+      query=query,
+      attribute_filter=attribute_filter,
+      ranking_options={"ranker": "auto", "score_threshold": 0.7},
+      max_num_results=max_results,
+  )
+  ```
 - Add DTOs in `app/schemas/search_results.py` and transformation helpers to convert raw File Search hits into Merak-friendly ranking data.
 
 ## Phase 5 — Response Assembly (reference rendering utilities in example)

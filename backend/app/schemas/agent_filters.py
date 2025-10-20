@@ -1,11 +1,11 @@
-"""Pydantic models describing the normalized hiring brief Merak collects."""
+"""Pydantic models describing the normalized filters used for agent retrieval."""
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Final, List, Sequence
+from enum import Enum
+from typing import Any, Final, List
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 try:  # pragma: no cover - optional dependency
     from agents import AgentOutputSchema as _BaseSchema
@@ -15,8 +15,25 @@ except ImportError:  # pragma: no cover - fallback when Agents SDK unavailable
 DEFAULT_CURRENCY: Final[str] = "USD"
 
 
-class RateConstraints(_BaseSchema):
-    """Desired compensation boundaries for candidate search."""
+class AvailabilityOption(str, Enum):
+    """Engagement model requested by the user."""
+
+    FULL_TIME = "full_time"
+    PART_TIME = "part_time"
+    CONTRACT = "contract"
+
+
+class AgentTypeOption(str, Enum):
+    """Supported communication modality for an agent profile."""
+
+    VOICE = "voice"
+    TEXT = "text"
+    IMAGE = "image"
+    MULTI_MODAL = "multi_modal"
+
+
+class BaseRateFilter(_BaseSchema):
+    """Hourly rate boundaries expressed in the configured currency."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -26,135 +43,169 @@ class RateConstraints(_BaseSchema):
         max_length=3,
         description="ISO-4217 currency code for monetary filters.",
     )
-    max_hourly_rate: float | None = Field(
+    min_rate: int | None = Field(
         default=None,
         ge=0,
-        description="Upper hourly rate threshold in the configured currency.",
+        description="Inclusive lower bound for the acceptable hourly base rate.",
     )
-    max_monthly_rate: float | None = Field(
+    max_rate: int | None = Field(
         default=None,
         ge=0,
-        description="Upper monthly rate threshold in the configured currency.",
+        description="Inclusive upper bound for the acceptable hourly base rate.",
     )
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "BaseRateFilter":
+        """Ensure the minimum rate does not exceed the maximum rate."""
+        if (
+            self.min_rate is not None
+            and self.max_rate is not None
+            and self.min_rate > self.max_rate
+        ):
+            msg = "min_rate cannot be greater than max_rate"
+            raise ValueError(msg)
+        return self
 
     def resolved(self) -> bool:
         """Return True when at least one rate constraint has been provided."""
-        return self.max_hourly_rate is not None or self.max_monthly_rate is not None
+        return self.min_rate is not None or self.max_rate is not None
 
 
-class AvailabilityWindow(_BaseSchema):
-    """Window describing when the user needs the agent to start and workload."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    start_date: date | None = Field(
-        default=None,
-        description="Earliest acceptable start date for the engagement.",
-    )
-    hours_per_week: int | None = Field(
-        default=None,
-        ge=1,
-        le=168,
-        description="Expected weekly hours commitment.",
-    )
-    timezone: str | None = Field(
-        default=None,
-        description="Preferred timezone or offset for synchronous collaboration.",
-    )
-
-    def resolved(self) -> bool:
-        """Return True once both start date and hours are known."""
-        return self.start_date is not None and self.hours_per_week is not None
-
-
-class LocationPreference(_BaseSchema):
-    """Geographic filters for candidate matching."""
+class SuccessRateFilter(_BaseSchema):
+    """Historical completion ratio thresholds."""
 
     model_config = ConfigDict(extra="forbid")
 
-    remote_ok: bool | None = Field(
+    min_success_rate: int | None = Field(
         default=None,
-        description="Whether fully remote candidates are acceptable.",
-    )
-    preferred_countries: List[str] = Field(
-        default_factory=list,
-        description="Country codes representing preferred working locations.",
-    )
-    onsite_cities: List[str] = Field(
-        default_factory=list,
-        description="Specific metro areas required for on-site or hybrid roles.",
+        ge=0,
+        le=100,
+        description="Minimum historical completion percentage required (0-100).",
     )
 
     def resolved(self) -> bool:
-        """Return True when remote policy is known and any on-site locales are captured."""
-        if self.remote_ok is None:
-            return False
-        if self.remote_ok:
-            return True
-        return bool(self.onsite_cities or self.preferred_countries)
+        """Return True when a minimum success rate threshold is present."""
+        return self.min_success_rate is not None
 
 
 class AgentFilterPayload(_BaseSchema):
-    """Normalized hiring brief Merak uses to drive downstream retrieval."""
+    """Normalized filter payload Merak hands to the semantic search layer."""
 
     model_config = ConfigDict(extra="forbid")
 
-    project_brief: str | None = Field(
+    summary: str | None = Field(
         default=None,
-        description="Short description of the business need supplied by the user.",
+        description="Normalized summary of the user's request.",
     )
-    role_title: str | None = Field(
+    search_query: str | None = Field(
         default=None,
-        description="Canonical title describing the desired agent (e.g., 'Data Analyst').",
+        description="Explicit semantic search query; falls back to the summary when absent.",
     )
-    required_skills: List[str] = Field(
+    base_rate: BaseRateFilter = Field(default_factory=BaseRateFilter)
+    success_rate: SuccessRateFilter = Field(default_factory=SuccessRateFilter)
+    availability: AvailabilityOption | None = Field(
+        default=None,
+        description="Preferred working model (full-time, part-time, or contract).",
+    )
+    industries: List[str] = Field(
         default_factory=list,
-        description="Skills that must be present for a candidate to qualify.",
+        description="Normalized industry tags (e.g., 'fintech', 'healthcare').",
     )
-    nice_to_have_skills: List[str] = Field(
+    agent_types: List[AgentTypeOption] = Field(
         default_factory=list,
-        description="Supplemental skills that should boost ranking but are not mandatory.",
+        description="Communication modalities the agent must support.",
     )
-    rate: RateConstraints = Field(default_factory=RateConstraints)
-    availability: AvailabilityWindow = Field(default_factory=AvailabilityWindow)
-    location: LocationPreference = Field(default_factory=LocationPreference)
+    agent_id: str | None = Field(
+        default=None,
+        description="Internal identifier carried for context; not used for filtering.",
+    )
+
+    def resolved_query(self) -> str | None:
+        """Return the semantic search query seeded by Merak."""
+        return self.search_query or self.summary
 
     def missing_fields(self) -> list[str]:
-        """Return human-readable names for filters that still need clarification."""
+        """Return filter facets that still require clarification."""
         missing: list[str] = []
 
-        if not self.project_brief:
-            missing.append("project_brief")
-        if not self.role_title:
-            missing.append("role_title")
-        if not self.required_skills:
-            missing.append("required_skills")
-        if not self.rate.resolved():
-            missing.append("rate")
-        if not self.availability.resolved():
+        if not self.resolved_query():
+            missing.append("search_query")
+        if not self.base_rate.resolved():
+            missing.append("base_rate")
+        if not self.success_rate.resolved():
+            missing.append("success_rate")
+        if self.availability is None:
             missing.append("availability")
-        if not self.location.resolved():
-            missing.append("location")
+        if not self.industries:
+            missing.append("industry")
+        if not self.agent_types:
+            missing.append("agent_type")
         return missing
 
     def is_complete(self) -> bool:
-        """Return True when no additional clarifications are required."""
+        """Return True once all required filter facets have been filled."""
         return not self.missing_fields()
 
-    def extend_skills(self, skills: Sequence[str], *, required: bool = True) -> None:
-        """Merge additional skills into either required or nice-to-have lists."""
-        target = self.required_skills if required else self.nice_to_have_skills
-        for skill in skills:
-            normalized = skill.strip()
-            if not normalized:
-                continue
-            if normalized not in target:
-                target.append(normalized)
+    def build_attribute_filter(self) -> dict[str, Any] | None:
+        """Construct an OpenAI File Search attribute_filter payload."""
+        filters: list[dict[str, Any]] = []
+
+        if self.industries:
+            industry_filters = [
+                {"type": "eq", "key": "industry", "value": industry}
+                for industry in self.industries
+            ]
+            filters.append(
+                industry_filters[0]
+                if len(industry_filters) == 1
+                else {"type": "or", "filters": industry_filters}
+            )
+
+        if self.agent_types:
+            agent_type_filters = [
+                {"type": "eq", "key": "agent_type", "value": agent_type.value}
+                for agent_type in self.agent_types
+            ]
+            filters.append(
+                agent_type_filters[0]
+                if len(agent_type_filters) == 1
+                else {"type": "or", "filters": agent_type_filters}
+            )
+
+        if self.base_rate.min_rate is not None:
+            filters.append(
+                {"type": "gte", "key": "base_rate", "value": self.base_rate.min_rate}
+            )
+
+        if self.base_rate.max_rate is not None:
+            filters.append(
+                {"type": "lte", "key": "base_rate", "value": self.base_rate.max_rate}
+            )
+
+        if self.success_rate.min_success_rate is not None:
+            filters.append(
+                {
+                    "type": "gte",
+                    "key": "success_rate",
+                    "value": self.success_rate.min_success_rate,
+                }
+            )
+
+        if self.availability is not None:
+            filters.append(
+                {"type": "eq", "key": "availability", "value": self.availability.value}
+            )
+
+        if not filters:
+            return None
+
+        return filters[0] if len(filters) == 1 else {"type": "and", "filters": filters}
 
 
 __all__ = [
     "AgentFilterPayload",
-    "AvailabilityWindow",
-    "LocationPreference",
-    "RateConstraints",
+    "AgentTypeOption",
+    "AvailabilityOption",
+    "BaseRateFilter",
+    "SuccessRateFilter",
 ]
