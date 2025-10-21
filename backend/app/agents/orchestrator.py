@@ -1,10 +1,9 @@
 """Merak orchestrator agent definition.
 
 This module wires the primary Merak assistant that gathers hiring filters,
-confirms the brief, and invokes the Searcher agent as a tool to retrieve
-matching candidates. The instructions mirror the *agents-as-tools* pattern
-from the OpenAI Agents example implementation, adapted to Merak's filter
-facets (base_rate, success_rate, availability, industry, agent_type).
+confirms the brief, and invokes the vector search tool to retrieve matching
+agents. The instructions mirror the *agents-as-tools* pattern from the OpenAI
+Agents example implementation, adapted to Merak's filter facets.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ except ImportError:  # pragma: no cover - provide a helpful runtime failure
 
 MERAK_AGENT_NAME = "merak_orchestrator"
 MERAK_SEARCH_TOOL_NAME = "search_agents"
+MERAK_SEARCH_TOOL_DESCRIPTION = "Normalize filters and retrieve ranked agent matches."
 
 MERAK_INSTRUCTIONS = dedent(
     """
@@ -60,11 +60,11 @@ MERAK_INSTRUCTIONS = dedent(
 ).strip()
 
 
-def build_merak_orchestrator(searcher_tool: Any, **agent_kwargs: Any) -> Any:
-    """Instantiate the Merak orchestrator agent with the provided Searcher tool.
+def build_merak_orchestrator(search_tool: Any, **agent_kwargs: Any) -> Any:
+    """Instantiate the Merak orchestrator agent with the provided search tool.
 
     Args:
-        searcher_tool: The tool Merak should invoke to normalize filters and run search.
+        search_tool: The tool Merak should invoke to normalize filters and run search.
         **agent_kwargs: Additional keyword arguments forwarded to the Agent constructor
             (e.g., ``model=...``, ``hooks=...``). These allow callers to supply runtime
             configuration without re-creating the instruction scaffolding.
@@ -81,7 +81,7 @@ def build_merak_orchestrator(searcher_tool: Any, **agent_kwargs: Any) -> Any:
             "openai-agents-python is required to build the Merak orchestrator agent."
         )
 
-    tools = [searcher_tool] if searcher_tool is not None else []
+    tools = [search_tool] if search_tool is not None else []
 
     return Agent(
         name=MERAK_AGENT_NAME,
@@ -95,5 +95,6 @@ __all__ = [
     "MERAK_AGENT_NAME",
     "MERAK_INSTRUCTIONS",
     "MERAK_SEARCH_TOOL_NAME",
+    "MERAK_SEARCH_TOOL_DESCRIPTION",
     "build_merak_orchestrator",
 ]

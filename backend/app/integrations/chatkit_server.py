@@ -17,15 +17,12 @@ from typing import Annotated, Any, AsyncIterator, Optional
 from pydantic import ConfigDict, Field
 
 from app.agents.orchestrator import (
+    MERAK_SEARCH_TOOL_DESCRIPTION,
     MERAK_SEARCH_TOOL_NAME,
     build_merak_orchestrator,
 )
-from app.agents.searcher import (
-    SEARCHER_TOOL_DESCRIPTION,
-    build_searcher_agent,
-)
 from app.core.settings import SettingsError, get_settings
-from app.services.search import build_file_search_tool
+from app.services.search import build_file_search_tool, build_merak_search_function
 from app.services.thread_store import ThreadStore
 
 try:  # pragma: no cover - optional dependency
@@ -218,7 +215,7 @@ _SERVER_SINGLETON: MerakChatKitServer | None = None
 
 
 def _build_default_assistant() -> Agent | None:
-    """Construct Merak's orchestrator agent with the Searcher tool attached."""
+    """Construct Merak's orchestrator agent with the File Search tool attached."""
     if Agent is None:
         return None
 
@@ -229,22 +226,19 @@ def _build_default_assistant() -> Agent | None:
         )
 
     file_search_tool = build_file_search_tool(
+        settings=settings,
         vector_store_id=settings.openai_vector_store_id,
         max_results=10,
     )
 
-    searcher_agent = build_searcher_agent(
+    search_tool = build_merak_search_function(
         file_search_tool,
-        model=settings.openai_agent_model,
-    )
-
-    searcher_tool = searcher_agent.as_tool(  # type: ignore[assignment]
         tool_name=MERAK_SEARCH_TOOL_NAME,
-        tool_description=SEARCHER_TOOL_DESCRIPTION,
+        tool_description=MERAK_SEARCH_TOOL_DESCRIPTION,
     )
 
     return build_merak_orchestrator(
-        searcher_tool,
+        search_tool,
         model=settings.openai_agent_model,
     )
 
