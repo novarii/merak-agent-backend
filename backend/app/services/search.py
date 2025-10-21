@@ -1,7 +1,7 @@
-"""Backward compatible re-export for the legacy search helper."""
+"""Backward compatible re-export for legacy search helpers."""
 
 from __future__ import annotations
 
-from app.services.file_search import build_file_search_tool
+from app.services.file_search import build_file_search_tool, build_merak_search_function
 
-__all__ = ["build_file_search_tool"]
+__all__ = ["build_file_search_tool", "build_merak_search_function"]
