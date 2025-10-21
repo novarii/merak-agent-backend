@@ -2,4 +2,6 @@
 
 from __future__ import annotations
 
-__all__ = ["thread_store"]
+from . import file_search, thread_store  # noqa: F401
+
+__all__ = ["file_search", "thread_store"]
