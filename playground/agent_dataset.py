@@ -37,6 +37,7 @@ class AgentProfile:
 
 
 _AGENT_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "merak-agents")
+_RNG_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "merak-agent-rng")
 
 # Static demo video identifiers used across agent payloads.
 KALEA_DEMO_LINK_ID = "44eFf-tRiSg"
@@ -44,7 +45,17 @@ KALEA_DEMO_LINK_ID = "44eFf-tRiSg"
 # Available avatar assets sourced from assets/profile/logos.
 PROFILE_IMG_POOL = [f"logoipsum-{idx}.svg" for idx in range(1, 12)]
 
+AVAILABILITY_OPTIONS = ("full-time", "part-time", "contract")
+AGENT_TYPE_OPTIONS = ("voice", "text", "multimodal")
+
 HighlightFactory = Callable[[random.Random], str]
+
+
+def _rng_for(agent_id: str, salt: str) -> random.Random:
+    """Derive a deterministic RNG seeded from the agent identifier."""
+
+    seed = uuid.uuid5(_RNG_NAMESPACE, f"{agent_id}:{salt}").int
+    return random.Random(seed)
 
 
 def _percentage_stat(low: int, high: int, suffix: str) -> HighlightFactory:
@@ -93,17 +104,28 @@ def _make_agent_id(name: str) -> str:
     return str(uuid.uuid5(_AGENT_ID_NAMESPACE, name.strip().lower()))
 
 
-def _random_profile_img() -> str:
+def _random_profile_img(rng: random.Random) -> str:
     """Return a random logo asset name for agent profile cards."""
 
-    return random.choice(PROFILE_IMG_POOL)
+    return rng.choice(PROFILE_IMG_POOL)
 
 
-def _generate_highlights(count: int = 3) -> List[str]:
+def _random_availability(rng: random.Random) -> str:
+    """Pick an availability value from the admissible pool."""
+
+    return rng.choice(AVAILABILITY_OPTIONS)
+
+
+def _random_agent_type(rng: random.Random) -> str:
+    """Pick an agent type value from the admissible pool."""
+
+    return rng.choice(AGENT_TYPE_OPTIONS)
+
+
+def _generate_highlights(rng: random.Random, count: int = 3) -> List[str]:
     """Create a set of marketing highlights with sensible performance floors."""
 
     sample_size = min(count, len(_HIGHLIGHT_FACTORIES))
-    rng = random.Random()
     selections = rng.sample(_HIGHLIGHT_FACTORIES, k=sample_size)
     return [factory(rng) for factory in selections]
 
@@ -132,9 +154,7 @@ Boom turns every conversation into intelligence. Real voices, real feelings, rea
         "base_rate": 499,
         "success_rate": 99,
         "experience_years": 4,
-        "availability": "full-time",
         "industry": "customer development",
-        "agent_type": "multimodal",
         "languages": ("English"),
         "endorsements": (
             {
@@ -182,8 +202,19 @@ def get_agent_records() -> List[AgentProfile]:
         highlights = (
             list(highlight_values)
             if highlight_values is not None
-            else _generate_highlights()
+            else _generate_highlights(_rng_for(agent_id, "highlights"))
         )
+        availability = payload.get("availability")
+        if availability not in AVAILABILITY_OPTIONS:
+            availability = _random_availability(
+                _rng_for(agent_id, "availability")
+            )
+        agent_type = payload.get("agent_type")
+        if agent_type not in AGENT_TYPE_OPTIONS:
+            agent_type = _random_agent_type(_rng_for(agent_id, "agent_type"))
+        profile_img = payload.get("profile_img")
+        if not profile_img:
+            profile_img = _random_profile_img(_rng_for(agent_id, "profile_img"))
         records.append(
             AgentProfile(
                 agent_id=agent_id,
@@ -191,16 +222,16 @@ def get_agent_records() -> List[AgentProfile]:
                 tagline=payload["tagline"],
                 card_description=payload["card_description"],
                 profile_description=payload["profile_description"],
-                profile_img=payload.get("profile_img", _random_profile_img()),
+                profile_img=profile_img,
                 developer=payload["developer"],
                 highlights=highlights,
                 demo_link=payload.get("demo_link"),
                 base_rate=payload.get("base_rate"),
                 success_rate=payload.get("success_rate"),
                 experience_years=payload.get("experience_years"),
-                availability=payload.get("availability"),
+                availability=availability,
                 industry=payload.get("industry"),
-                agent_type=payload.get("agent_type"),
+                agent_type=agent_type,
                 languages=list(payload.get("languages", ())),
                 endorsements=endorsements,
             )
