@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import Callable, List
 import random
 import uuid
 
@@ -39,10 +39,54 @@ class AgentProfile:
 _AGENT_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "merak-agents")
 
 # Static demo video identifiers used across agent payloads.
-DEMO_LINK_ID = "44eFf-tRiSg"
+KALEA_DEMO_LINK_ID = "44eFf-tRiSg"
 
 # Available avatar assets sourced from assets/profile/logos.
 PROFILE_IMG_POOL = [f"logoipsum-{idx}.svg" for idx in range(1, 12)]
+
+HighlightFactory = Callable[[random.Random], str]
+
+
+def _percentage_stat(low: int, high: int, suffix: str) -> HighlightFactory:
+    def _factory(rng: random.Random) -> str:
+        return f"{rng.randint(low, high)}% {suffix}"
+
+    return _factory
+
+
+def _multiplier_stat(low: float, high: float, suffix: str) -> HighlightFactory:
+    def _factory(rng: random.Random) -> str:
+        return f"{rng.uniform(low, high):.1f}x {suffix}"
+
+    return _factory
+
+
+_HIGHLIGHT_FACTORIES: List[HighlightFactory] = [
+    _percentage_stat(95, 99, "accuracy rate"),
+    _multiplier_stat(1.8, 3.6, "faster response"),
+    _percentage_stat(93, 99, "task completion"),
+    (lambda rng: f"{rng.uniform(99.4, 99.9):.1f}% uptime"),
+    _multiplier_stat(3.0, 4.5, "ROI increase"),
+    _percentage_stat(85, 95, "cost reduction"),
+    _multiplier_stat(3.5, 4.8, "productivity gain"),
+    _percentage_stat(94, 99, "customer satisfaction"),
+    (lambda rng: f"Handles {rng.randint(200, 500)}+ edge cases"),
+    (lambda rng: f"{rng.randint(30, 60)}+ integrations"),
+    (lambda rng: f"Supports {rng.randint(12, 20)} languages"),
+    (lambda rng: "24/7 availability"),
+    (lambda rng: f"{rng.randint(1, 3)}M+ transactions/month"),
+    (lambda rng: f"{rng.randint(400, 700)}K+ queries handled"),
+    (lambda rng: f"{rng.randint(95, 140)}+ industry templates"),
+    (lambda rng: f"Processes {rng.randint(10, 25)}K+ daily"),
+    (lambda rng: f"{rng.randint(95, 100)} NPS score"),
+    (lambda rng: f"{rng.uniform(4.7, 5.0):.1f}/5 user rating"),
+    _percentage_stat(90, 98, "first-contact fix"),
+    (lambda rng: "ISO certified"),
+    (lambda rng: "HIPAA compliant"),
+    (lambda rng: "SOC 2 certified"),
+    (lambda rng: f"{rng.randint(4, 8)} years proven track"),
+    (lambda rng: "Zero data breaches"),
+]
 
 
 def _make_agent_id(name: str) -> str:
@@ -53,6 +97,15 @@ def _random_profile_img() -> str:
     """Return a random logo asset name for agent profile cards."""
 
     return random.choice(PROFILE_IMG_POOL)
+
+
+def _generate_highlights(count: int = 3) -> List[str]:
+    """Create a set of marketing highlights with sensible performance floors."""
+
+    sample_size = min(count, len(_HIGHLIGHT_FACTORIES))
+    rng = random.Random()
+    selections = rng.sample(_HIGHLIGHT_FACTORIES, k=sample_size)
+    return [factory(rng) for factory in selections]
 
 
 _RAW_AGENT_DATA = (
@@ -75,12 +128,7 @@ Boom doesn't replace surveys. It makes them unnecessary for most decisions. By t
 Integrated through Merak's Unified API, it connects to your chat system in minutes and starts learning immediately. Your feedback loop goes from weeks to seconds, and your product decisions start reflecting what customers actually experience, not what they vaguely recall.
 Boom turns every conversation into intelligence. Real voices, real feelings, real insights captured at the moment they matter most.""",
         "developer": "Open Studios",
-        "highlights": (
-            "75% user retention rate",
-            "Explainable AI certified",
-            "9.5 NPS score",
-        ),
-        "demo_link": DEMO_LINK_ID,
+        "demo_link": KALEA_DEMO_LINK_ID,
         "base_rate": 499,
         "success_rate": 99,
         "experience_years": 4,
@@ -130,6 +178,12 @@ def get_agent_records() -> List[AgentProfile]:
             )
             for item in payload.get("endorsements", ())
         ]
+        highlight_values = payload.get("highlights")
+        highlights = (
+            list(highlight_values)
+            if highlight_values is not None
+            else _generate_highlights()
+        )
         records.append(
             AgentProfile(
                 agent_id=agent_id,
@@ -139,7 +193,7 @@ def get_agent_records() -> List[AgentProfile]:
                 profile_description=payload["profile_description"],
                 profile_img=payload.get("profile_img", _random_profile_img()),
                 developer=payload["developer"],
-                highlights=list(payload.get("highlights", ())),
+                highlights=highlights,
                 demo_link=payload.get("demo_link"),
                 base_rate=payload.get("base_rate"),
                 success_rate=payload.get("success_rate"),
