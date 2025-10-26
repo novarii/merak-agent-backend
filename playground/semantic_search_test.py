@@ -10,9 +10,11 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env.loca
 client = OpenAI()
 
 results = client.vector_stores.search(
-    vector_store_id="vs_68f727089ac08191824927c79f3869f6",  # your vector store ID
-    query="healthcare patient support medical terminology",  # your search query
-    max_num_results=1
+    vector_store_id="vs_68fc1b149c04819181785e5efc9c2bcd",  # your vector store ID
+    query="specialized recruiting agent for recruitment",  # your search query
+    ranking_options={
+        "score_threshold": 0.4,
+    },  # require a minimum similarity score for results
 )
 
 def extract_agent_ids(search_results: Any) -> list[str]:
